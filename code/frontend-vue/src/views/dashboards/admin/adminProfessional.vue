@@ -29,9 +29,10 @@
       </p>
       <p><strong>Email:</strong> {{ professionalDetails.email }}</p>
       <p><strong>Username:</strong> {{ professionalDetails.username }}</p>
-      {{
-        console.log(professionalDetails.verified, professionalDetails.blocked)
-      }}
+      <p>
+        <strong>Document Link:</strong>
+        {{ professionalDetails.documents }}
+      </p>
       <div class="action-buttons">
         <button
           class="btn-action"

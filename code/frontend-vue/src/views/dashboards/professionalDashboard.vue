@@ -155,16 +155,16 @@
         </div>
         <div class="form-group">
           <label>Pincode</label>
-          <input type="text" v-model="userInfo.pincode" />
+          <input type="number" v-model="userInfo.pincode" />
         </div>
         <div class="form-group">
           <label>Experience (In Years)</label>
-          <input type="text" v-model="userInfo.experience" />
+          <input type="number" v-model="userInfo.experience" />
         </div>
         <div class="form-group">
           <label>Phone</label>
           <input
-            type="phone"
+            type="number"
             v-model="userInfo.phone"
             placeholder="Enter new phone (optional)"
           />
@@ -208,6 +208,7 @@ export default {
       experience: '',
       phone: '',
       verified: 0,
+      blocked: 0,
     })
     const services = ref([])
 
@@ -287,6 +288,18 @@ export default {
 
     const updateProfile = async () => {
       try {
+        if (userInfo.value.pincode.toString().length !== 6) {
+          alert('Pincode must be exactly 6 digits long.')
+          return
+        }
+
+        if (
+          userInfo.value.phone &&
+          userInfo.value.phone.toString().length !== 10
+        ) {
+          alert('Phone number must be exactly 10 digits long.')
+          return
+        }
         const response = await axios.put(
           'http://localhost:5000/professional/profile',
           userInfo.value,
@@ -463,8 +476,51 @@ export default {
       }
     }
 
+    const generateReport = async () => {
+      try {
+        const response = await axios.get(
+          'http://localhost:5000/generate-report/professional',
+          { withCredentials: true, responseType: 'blob' },
+        )
+        const url = window.URL.createObjectURL(new Blob([response.data]))
+
+        const link = document.createElement('a')
+        link.href = url
+        link.setAttribute('download', 'professional_report.pdf') // Set the file name
+
+        document.body.appendChild(link)
+        link.click()
+
+        link.remove()
+        window.URL.revokeObjectURL(url)
+
+        alert('Report generated successfully')
+      } catch (error) {
+        console.error('Failed to generate report:', error)
+        if (error.response?.status === 403) {
+          alert('You do not have permission to generate a report')
+        } else if (error.response?.status === 500) {
+          alert('Server error occurred. Please try again later')
+        } else {
+          alert('Failed to generate report. Please try again')
+        }
+      }
+    }
+
+    const checkUser = async () => {
+      fetchUserData()
+      if (
+        userInfo.username === null ||
+        userInfo.username === undefined ||
+        userInfo.username === '' ||
+        userInfo.blocked === 1
+      ) {
+        router.push('/signin')
+      }
+    }
+
     onMounted(() => {
-      fetchUserData(), fetchServices(), servicesSetup()
+      fetchUserData(), fetchServices(), servicesSetup(), checkUser()
     })
 
     return {
@@ -481,6 +537,7 @@ export default {
       cancelRequest,
       updateRequest,
       closeRequest,
+      generateReport,
     }
   },
 }

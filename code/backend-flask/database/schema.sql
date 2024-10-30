@@ -47,7 +47,7 @@ CREATE TABLE professionals (
     phone INTEGER NOT NULL,
     verified INTEGER
         CHECK(verified IN (0, 1))
-        NOT NULL DEFAULT 1,
+        NOT NULL DEFAULT 0,
     documents TEXT NOT NULL,
     date_of_joining DATE DEFAULT (CURRENT_DATE),
     FOREIGN KEY (credential_id) REFERENCES credentials(id) ON DELETE CASCADE
@@ -59,6 +59,7 @@ CREATE TABLE service_requests (
     service_id INTEGER NOT NULL,    
     customer_id INTEGER NOT NULL,
     professional_id INTEGER,
+    date_of_request TEXT NOT NULL DEFAULT (CURRENT_DATE),
     date_of_service DATE NOT NULL,
     service_description TEXT,
     price REAL NOT NULL,

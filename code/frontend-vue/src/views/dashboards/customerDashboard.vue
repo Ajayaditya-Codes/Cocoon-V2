@@ -243,11 +243,11 @@
             <td>{{ service.professionalName }} ({{ service.p_phone }})</td>
             <td>
               {{ service.serviceName }}
-              ({{
+              {{
                 service.average_rating
-                  ? 'Rating - ' + service.average_rating
+                  ? '(Rating - ' + service.average_rating + ')'
                   : ''
-              }})
+              }}
             </td>
             <td>{{ service.pincode }}</td>
             <td>{{ service.price }}</td>
@@ -350,6 +350,7 @@ export default {
       pincode: '',
       password: '',
       phone: '',
+      blocked: 0,
     })
 
     const services = ref([])
@@ -420,6 +421,18 @@ export default {
 
     const updateProfile = async () => {
       try {
+        if (userInfo.value.pincode.toString().length !== 6) {
+          alert('Pincode must be exactly 6 digits long.')
+          return
+        }
+
+        if (
+          userInfo.value.phone &&
+          userInfo.value.phone.toString().length !== 10
+        ) {
+          alert('Phone number must be exactly 10 digits long.')
+          return
+        }
         await axios.put(
           'http://localhost:5000/customer/profile',
           userInfo.value,
@@ -464,6 +477,37 @@ export default {
           alert('Unable to load services due to server error')
         } else {
           alert('Failed to load services. Please try again')
+        }
+      }
+    }
+
+    const generateReport = async () => {
+      try {
+        const response = await axios.get(
+          'http://localhost:5000/generate-report/customer',
+          { withCredentials: true, responseType: 'blob' },
+        )
+        const url = window.URL.createObjectURL(new Blob([response.data]))
+
+        const link = document.createElement('a')
+        link.href = url
+        link.setAttribute('download', 'customer_report.pdf') // Set the file name
+
+        document.body.appendChild(link)
+        link.click()
+
+        link.remove()
+        window.URL.revokeObjectURL(url)
+
+        alert('Report generated successfully')
+      } catch (error) {
+        console.error('Failed to generate report:', error)
+        if (error.response?.status === 403) {
+          alert('You do not have permission to generate a report')
+        } else if (error.response?.status === 500) {
+          alert('Server error occurred. Please try again later')
+        } else {
+          alert('Failed to generate report. Please try again')
         }
       }
     }
@@ -664,9 +708,22 @@ export default {
       })
     }
 
+    const checkUser = async () => {
+      fetchUserData()
+      if (
+        userInfo.username === null ||
+        userInfo.username === undefined ||
+        userInfo.username === '' ||
+        userInfo.blocked === 1
+      ) {
+        router.push('/signin')
+      }
+    }
+
     onMounted(() => {
       fetchUserData()
       servicesSetup()
+      checkUser()
     })
 
     return {
@@ -689,6 +746,7 @@ export default {
       minDate,
       acceptRequest,
       updateRequest,
+      generateReport,
     }
   },
 }

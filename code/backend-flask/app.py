@@ -1,11 +1,19 @@
-from flask import Flask, jsonify, request, session
+from flask import Flask, jsonify, request, session, send_file
 from flask_session import Session
 from flask_cors import CORS
 import sqlite3
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
 from datetime import datetime 
+import tempfile
+from dotenv import load_dotenv
+import requests
+import os
+from celery import Celery
+from dotenv import load_dotenv
+from fpdf import FPDF
 
+load_dotenv()
 app = Flask(__name__)
 
 CORS(app, supports_credentials=True)
@@ -16,6 +24,34 @@ app.config['SESSION_USE_SIGNER'] = True
 app.config['SECRET_KEY'] = 'aefnjnsdfjnqoiwj18921@q83&e239asd' 
 
 Session(app)
+
+MAILGUN_API_URL = os.getenv('MAILGUN_API_URL')
+MAILGUN_API_KEY = os.getenv('MAILGUN_API_KEY')
+MAILGUN_FROM_EMAIL = os.getenv('MAILGUN_FROM_EMAIL')
+
+def send_email(to_email, subject, text):
+    # Load Mailgun parameters from environment variables
+    api_url = MAILGUN_API_URL
+    api_key = MAILGUN_API_KEY
+    from_email = MAILGUN_FROM_EMAIL
+
+    # Send the email via Mailgun
+    response = requests.post(
+        api_url,
+        auth=("api", api_key),
+        data={
+            "from": from_email,
+            "to": to_email,
+            "subject": subject,
+            "text": text
+        }
+    )
+
+    # Handle response
+    if response.status_code == 200:
+        return {'success': True, 'message': 'Email sent successfully'}
+    else:
+        return {'success': False, 'error': response.json()}
 
 def get_db_connection():
     conn = sqlite3.connect("./database/database.db")
@@ -31,7 +67,7 @@ def is_strong_password(password):
 
 @app.route("/")
 def home():
-    return "Cocoon V1"
+    return "Cocoon V2"
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -87,7 +123,6 @@ def session_status():
 
     except Exception as e:
         return jsonify({"message": "An error occurred."}), 500
-
 
 @app.route("/logout", methods=["GET"])
 def logout():
@@ -273,8 +308,8 @@ def signup_professional():
 def services():
     try:
         conn = get_db_connection()
-        services = conn.execute("SELECT id, name FROM services").fetchall()
-        services_list = [{"id": service["id"], "name": service["name"]} for service in services]
+        services = conn.execute("SELECT id, name, price, description FROM services").fetchall()
+        services_list = [{"id": service["id"], "name": service["name"], "price": service["price"], "description": service["description"]} for service in services]
         return jsonify(services_list), 200
     
     except sqlite3.Error:
@@ -545,8 +580,13 @@ def get_services():
                 professionals p
             JOIN 
                 services s ON p.service_provided = s.name
+            JOIN 
+                credentials cr ON cr.id = p.credential_id
             WHERE 
-                p.verified = 1
+                p.verified = 1 AND
+                cr.blocked = 0
+            ORDER BY
+                average_rating DESC
         ''').fetchall()
         
         services_list = [dict(service) for service in services]
@@ -658,6 +698,139 @@ def get_service_requests(status):
 
     finally:
         conn.close()
+
+@app.route('/generate-report/professional', methods=['GET'])
+def generate_professional_report():
+    professional_id, user_type = session.get('user_id'), session.get('user_type')
+    if user_type != 'professional':
+        return jsonify({"success": False, "error": "Unauthorized", "message": "Login to generate report", "code": 403}), 403
+    query = """
+    SELECT 
+        sr.id AS request_id,
+        c.full_name AS customer_name,
+        c.address AS customer_address,
+        c.pincode AS customer_pincode,
+        c.phone AS customer_phone,
+        sr.price,
+        sr.date_of_service,
+        sr.service_description,
+        sr.service_status,
+        sr.rating,
+        sr.review,
+        s.name AS service_name    
+    FROM service_requests sr
+    JOIN customers c ON sr.customer_id = c.credential_id
+    JOIN services s ON s.id = sr.service_id
+    WHERE sr.professional_id = ? 
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, (professional_id,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            raise Exception("No service requests found for the specified professional.")
+
+    except sqlite3.Error as e:
+        raise Exception("Database query error: " + str(e))
+    except Exception as e:
+        raise Exception("Error fetching data: " + str(e))
+    finally:
+        conn.close()
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="Service Requests Report", ln=True, align='C')
+
+    for row in rows:
+        pdf.cell(0, 10, txt=f"Request ID: {row['request_id']}", ln=True)
+        pdf.cell(0, 10, txt=f"Customer Name: {row['customer_name']}", ln=True)
+        pdf.cell(0, 10, txt=f"Customer Address: {row['customer_address']}", ln=True)
+        pdf.cell(0, 10, txt=f"Customer Pincode: {row['customer_pincode']}", ln=True)
+        pdf.cell(0, 10, txt=f"Customer Phone: {row['customer_phone']}", ln=True)
+        pdf.cell(0, 10, txt=f"Price: {row['price']:.2f}", ln=True)
+        pdf.cell(0, 10, txt=f"Date of Service: {row['date_of_service']}", ln=True)
+        pdf.cell(0, 10, txt=f"Service Description: {row['service_description']}", ln=True)
+        pdf.cell(0, 10, txt=f"Service Status: {row['service_status']}", ln=True)
+        pdf.cell(0, 10, txt=f"Rating: {row['rating']}", ln=True)
+        pdf.cell(0, 10, txt=f"Review: {row['review']}", ln=True)
+        pdf.cell(0, 10, txt=f"Service Name: {row['service_name']}", ln=True)
+        pdf.cell(0, 10, txt="", ln=True) 
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+        pdf.output(temp_file.name)  
+        temp_file.seek(0)  
+
+        return send_file(temp_file.name, as_attachment=True, download_name='professional_report.pdf', mimetype='application/pdf')
+
+@app.route('/generate-report/customer/', methods=['GET'])
+def generate_customer_report():
+    customer_id, user_type = session.get('user_id'), session.get('user_type')
+    if user_type != 'customer':
+        return jsonify({"success": False, "error": "Unauthorized", "message": "Login to generate report", "code": 403}), 403
+    query = """
+    SELECT 
+        sr.id AS request_id,
+        p.full_name AS professional_name,
+        p.service_provided AS professional_service,
+        p.pincode AS professional_pincode,
+        p.phone AS professional_phone,
+        sr.price,
+        sr.date_of_service,
+        sr.service_description,
+        sr.service_status,
+        sr.rating,
+        sr.review,
+        s.name AS service_name    
+    FROM service_requests sr
+    JOIN professionals p ON sr.professional_id = p.credential_id
+    JOIN services s ON s.id = sr.service_id
+    WHERE sr.customer_id = ? 
+    """
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, (customer_id,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            raise Exception("No service requests found for the specified customer.")
+
+    except sqlite3.Error as e:
+        raise Exception("Database query error: " + str(e))
+    except Exception as e:
+        raise Exception("Error fetching data: " + str(e))
+    finally:
+        conn.close()
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="Service Requests Report", ln=True, align='C')
+
+    for row in rows:
+        pdf.cell(0, 10, txt=f"Request ID: {row['request_id']}", ln=True)
+        pdf.cell(0, 10, txt=f"Professional Name: {row['professional_name']}", ln=True)
+        pdf.cell(0, 10, txt=f"Professional Service: {row['professional_service']}", ln=True)
+        pdf.cell(0, 10, txt=f"Professional Pincode: {row['professional_pincode']}", ln=True)
+        pdf.cell(0, 10, txt=f"Professional Phone: {row['professional_phone']}", ln=True)
+        pdf.cell(0, 10, txt=f"Price: {row['price']:.2f}", ln=True)
+        pdf.cell(0, 10, txt=f"Date of Service: {row['date_of_service']}", ln=True)
+        pdf.cell(0, 10, txt=f"Service Description: {row['service_description']}", ln=True)
+        pdf.cell(0, 10, txt=f"Service Status: {row['service_status']}", ln=True)
+        pdf.cell(0, 10, txt=f"Rating: {row['rating']}", ln=True)
+        pdf.cell(0, 10, txt=f"Review: {row['review']}", ln=True)
+        pdf.cell(0, 10, txt=f"Service Name: {row['service_name']}", ln=True)
+        pdf.cell(0, 10, txt="", ln=True)  
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+        pdf.output(temp_file.name)  
+        temp_file.seek(0)  
+
+        return send_file(temp_file.name, as_attachment=True, download_name='customer_report.pdf', mimetype='application/pdf')
 
 @app.route('/delete-service-request/<int:request_id>', methods=['DELETE'])
 def delete_service_request(request_id):
@@ -904,7 +1077,8 @@ def admin_get_professional(professional_id):
                     FROM service_requests sr 
                     WHERE sr.professional_id = p.credential_id 
                     AND sr.service_status = 'closed') AS average_rating,
-                cr.blocked
+                cr.blocked,
+                p.documents
             FROM professionals p
             JOIN credentials cr ON p.credential_id = cr.id
             WHERE p.credential_id = ?
@@ -1022,9 +1196,21 @@ def admin_block_user(user_id):
         if not user:
             return jsonify({"success": False, "error": "User not found", "message": "User not found", "code": 404}), 404
 
+        # Block the user
         cursor.execute("UPDATE credentials SET blocked = 1 WHERE id = ?", (user_id,))
         conn.commit()
-        return jsonify({"success": True, "message": "User blocked successfully", "code": 200}), 200
+
+        # Get user email
+        user_email = user['email']  # Ensure your database returns the email
+
+        # Send email notification
+        email_result = send_email(
+            to_email=user_email,
+            subject='Account Blocked Notification',
+            text='Your account has been blocked by an admin. If you believe this is an error, please contact support.'
+        )
+
+        return jsonify({"success": True, "message": "User blocked successfully", "email_status": email_result}), 200
 
     except sqlite3.Error as e:
         return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
@@ -1051,40 +1237,18 @@ def admin_unblock_user(user_id):
 
         cursor.execute("UPDATE credentials SET blocked = 0 WHERE id = ?", (user_id,))
         conn.commit()
-        return jsonify({"success": True, "message": "User unblocked successfully", "code": 200}), 200
 
-    except sqlite3.Error as e:
-        return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
+        # Get user email
+        user_email = user['email']  # Ensure your database returns the email
 
-    finally:
-        conn.close()
+        # Send email notification
+        email_result = send_email(
+            to_email=user_email,
+            subject='Account Unblocked Notification',
+            text='Your account has been unblocked. You can now log in.'
+        )
 
-@app.route('/admin/delete-service/<int:service_id>', methods=['DELETE'])
-def delete_service(service_id):
-    user_id, user_type = session.get('user_id'), session.get('user_type')
-
-    if user_type != 'admin':
-        return jsonify({"success": False, "error": "Unauthorized", "message": "Admin access required", "code": 403}), 403
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("SELECT * FROM services WHERE id = ?", (service_id,))
-        service = cursor.fetchone()
-
-        if not service:
-            return jsonify({"success": False, "error": "Service not found", "message": "Service not found", "code": 404}), 404
-
-        cursor.execute("SELECT * FROM service_requests WHERE service_id = ? AND service_status != 'closed'", (service_id,))
-        active_requests = cursor.fetchall()
-
-        if active_requests:
-            return jsonify({"success": False, "error": "Active requests found", "message": "Cannot delete service with active requests", "code": 400}), 400
-
-        cursor.execute("DELETE FROM services WHERE id = ?", (service_id,))
-        conn.commit()
-        return jsonify({"success": True, "message": "Service deleted successfully", "code": 200}), 200
+        return jsonify({"success": True, "message": "User unblocked successfully", "email_status": email_result}), 200
 
     except sqlite3.Error as e:
         return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
@@ -1103,15 +1267,96 @@ def verify_professional(professional_id):
     cursor = conn.cursor()
 
     try:
-        cursor.execute("SELECT * FROM professionals WHERE credential_id = ?", (professional_id,))
+        cursor.execute("SELECT * FROM credentials WHERE id = ? and userType = 'professional'", (professional_id,))
         professional = cursor.fetchone()
 
         if not professional:
             return jsonify({"success": False, "error": "Professional not found", "message": "Professional not found", "code": 404}), 404
-
+        
+        # Update verification status
         cursor.execute("UPDATE professionals SET verified = 1 WHERE credential_id = ?", (professional_id,))
         conn.commit()
-        return jsonify({"success": True, "message": "Professional verified successfully", "code": 200}), 200
+
+        # Get professional email (assuming it's stored in the professionals table)
+        professional_email = professional['email']  # Adjust this based on your schema
+
+        # Send email notification
+        email_result = send_email(
+            to_email=professional_email,
+            subject='Professional Profile Verified',
+            text='Congratulations! Your professional profile has been successfully verified.'
+        )
+
+        return jsonify({"success": True, "message": "Professional verified successfully", "email_status": email_result}), 200
+
+    except sqlite3.Error as e:
+        return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
+
+    finally:
+        conn.close()
+
+@app.route('/admin/update-service-price/<int:service_id>', methods=['PUT'])
+def update_service_price(service_id):
+    user_id, user_type = session.get('user_id'), session.get('user_type')
+
+    if user_type != 'admin':
+        return jsonify({"success": False, "error": "Unauthorized", "message": "Admin access required", "code": 403}), 403
+
+    data = request.get_json()
+    new_price = data.get('new_price')
+    new_description = data.get('new_description')
+
+    if new_price is None:
+        return jsonify({"success": False, "error": "Invalid input", "message": "New price is required", "code": 400}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT * FROM services WHERE id = ?", (service_id,))
+        service = cursor.fetchone()
+
+        if not service:
+            return jsonify({"success": False, "error": "Service not found", "message": "Service not found", "code": 404}), 404
+
+        cursor.execute("UPDATE services SET price = ?, description = ? WHERE id = ?", (new_price, new_description, service_id))
+        conn.commit()
+        return jsonify({"success": True, "message": "Service price updated successfully", "code": 200}), 200
+
+    except sqlite3.Error as e:
+        return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
+
+    finally:
+        conn.close()
+
+@app.route('/admin/create-service', methods=['POST'])
+def create_service():
+    user_id, user_type = session.get('user_id'), session.get('user_type')
+
+    if user_type != 'admin':
+        return jsonify({"success": False, "error": "Unauthorized", "message": "Admin access required", "code": 403}), 403
+
+    data = request.get_json()
+    service_name = data.get('name')
+    service_price = data.get('price')
+    description = data.get('description')
+
+    if not service_name or service_price is None:
+        return jsonify({"success": False, "error": "Invalid input", "message": "Service name and price are required", "code": 400}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT * FROM services WHERE name = ?", (service_name,))
+        existing_service = cursor.fetchone()
+
+        if existing_service:
+            return jsonify({"success": False, "error": "Service already exists", "message": "A service with this name already exists", "code": 409}), 409
+
+        cursor.execute("INSERT INTO services (name, price, description) VALUES (?, ?, ?)", (service_name, service_price, description))
+        conn.commit()
+        return jsonify({"success": True, "message": "Service created successfully", "code": 201}), 201
 
     except sqlite3.Error as e:
         return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
