@@ -24,9 +24,22 @@
         >
           Professionals
         </button>
+        <button
+          :class="{ active: activeTab === 'report' }"
+          @click="switchTab('report')"
+        >
+          Report
+        </button>
       </div>
       <button class="btn btn-logout" @click="logout">Logout</button>
     </div>
+    <div v-if="activeTab === 'report'" class="report-tab dashboard-tab">
+      <h2 class="report-title">Generate CSV Report of Sevices</h2>
+      <button class="btn btn-generate" @click="generateReport">
+        Generate Report
+      </button>
+    </div>
+
     <div v-if="activeTab === 'services'" class="dashboard-tab">
       <table class="service-table">
         <thead>
@@ -361,6 +374,38 @@ export default {
       }
     }
 
+    const generateReport = async () => {
+      try {
+        const response = await axios.get(
+          'http://localhost:5000/generate-report/admin',
+          {
+            withCredentials: true,
+            responseType: 'blob',
+          },
+        )
+
+        const url = window.URL.createObjectURL(new Blob([response.data]))
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'report.csv'
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        window.URL.revokeObjectURL(url)
+
+        alert('Report generated and downloaded successfully')
+      } catch (error) {
+        console.error('Failed to generate report:', error)
+        if (error.response?.status === 403) {
+          alert('You do not have permission to generate a report')
+        } else if (error.response?.status === 500) {
+          alert('Server error occurred. Please try again later')
+        } else {
+          alert('Failed to generate report. Please try again')
+        }
+      }
+    }
+
     onMounted(() => {
       fetchProfessionals()
       fetchCustomers()
@@ -378,6 +423,7 @@ export default {
       services,
       updateService,
       createService,
+      generateReport,
     }
   },
 }

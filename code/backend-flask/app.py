@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, session, send_file
+from flask import Flask, jsonify, request, session, send_file, Response
 from flask_session import Session
 from flask_cors import CORS
 import sqlite3
@@ -10,8 +10,11 @@ from dotenv import load_dotenv
 import requests
 import os
 from celery import Celery
+from celery.schedules import crontab
 from dotenv import load_dotenv
 from fpdf import FPDF
+import pandas as pd
+import io
 
 load_dotenv()
 app = Flask(__name__)
@@ -26,16 +29,180 @@ app.config['SECRET_KEY'] = 'aefnjnsdfjnqoiwj18921@q83&e239asd'
 Session(app)
 
 MAILGUN_API_URL = os.getenv('MAILGUN_API_URL')
-MAILGUN_API_KEY = os.getenv('MAILGUN_API_KEY')
+MAILGUN_API_KEY = os.getenv('MAILGUN_API_KEY')  
 MAILGUN_FROM_EMAIL = os.getenv('MAILGUN_FROM_EMAIL')
 
+app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
+celery = Celery(__name__, broker=app.config['CELERY_BROKER_URL'])
+
+@celery.task
+def send_celery_email():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        users = cursor.execute("SELECT email, username, id FROM credentials WHERE userType = 'professional'").fetchall()
+
+        user_list = [dict(user) for user in users]
+
+        for user in user_list:
+            cursor.execute("""
+                SELECT 
+                    sr.id AS request_id,
+                    c.full_name AS customer_name,
+                    c.address,
+                    c.pincode,
+                    sr.price,
+                    sr.date_of_service,
+                    sr.service_description,
+                    c.phone,
+                    sr.service_status
+                FROM service_requests sr
+                JOIN customers c ON sr.customer_id = c.credential_id
+                WHERE sr.professional_id = ? AND (sr.service_status = 'requested' OR sr.service_status = 'assigned')
+            """, (user["id"],))
+            services = cursor.fetchall()
+
+            services = [dict(service) for service in services]
+
+            email_content = f"Hello,\n\nHere are your pending service requests:\n\n"
+
+            for service in services:
+                email_content += (
+                    f"Request ID: {service['request_id']}\n" 
+                    f"Customer Name: {service['customer_name']}\n"
+                    f"Address: {service['address']}\n"  
+                    f"Pincode: {service['pincode']}\n" 
+                    f"Price: {service['price']}\n"  
+                    f"Date of Service: {service['date_of_service']}\n"  
+                    f"Description: {service['service_description']}\n"  
+                    f"Phone: {service['phone']}\n"  
+                    f"Status: {service['service_status']}\n\n"  
+                )
+            
+            email_content += "Thank you!\nCocoon Team"
+
+            response = requests.post(
+                MAILGUN_API_URL,
+                auth=("api", MAILGUN_API_KEY),
+                data={
+                    "from": MAILGUN_FROM_EMAIL,
+                    "to": user["email"],
+                    "subject": "Cocoon Daily Report Remainder - Celery",
+                    "text": email_content
+                }
+            )
+
+            if response.status_code == 200:
+                return {'success': True, 'message': 'Email sent successfully'}
+            else:
+                return {'success': False, 'error': response.json()}
+
+    except sqlite3.Error as e:
+        return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
+
+    finally:
+        conn.close()
+
+@celery.task
+def generate_professional_monthly_report():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        users = cursor.execute("SELECT email, username, id FROM credentials WHERE userType = 'professional'").fetchall()
+
+        user_list = [dict(user) for user in users]
+
+        for user in user_list:
+            query = """
+            SELECT 
+                sr.id AS request_id,
+                c.full_name AS customer_name,
+                c.address AS customer_address,
+                c.pincode AS customer_pincode,
+                c.phone AS customer_phone,
+                sr.price,
+                sr.date_of_service,
+                sr.service_description,
+                sr.service_status,
+                sr.rating,
+                sr.review,
+                s.name AS service_name    
+            FROM service_requests sr
+            JOIN customers c ON sr.customer_id = c.credential_id
+            JOIN services s ON s.id = sr.service_id
+            WHERE sr.professional_id = ? 
+            """
+
+            email_content = f"Hey, {user['username']}. Find your monthly report attached below.\n\n Thank You! \n Cocoon Team"
+
+            cursor.execute(query, (user['id'],))
+            rows = cursor.fetchall()
+
+            if not rows:
+                raise Exception("No service requests found for the specified professional.")
+
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", size=12)
+            pdf.cell(200, 10, txt="Service Requests Report", ln=True, align='C')
+
+            for row in rows:
+                pdf.cell(0, 10, txt=f"Request ID: {row['request_id']}", ln=True)
+                pdf.cell(0, 10, txt=f"Customer Name: {row['customer_name']}", ln=True)
+                pdf.cell(0, 10, txt=f"Customer Address: {row['customer_address']}", ln=True)
+                pdf.cell(0, 10, txt=f"Customer Pincode: {row['customer_pincode']}", ln=True)
+                pdf.cell(0, 10, txt=f"Customer Phone: {row['customer_phone']}", ln=True)
+                pdf.cell(0, 10, txt=f"Price: {row['price']:.2f}", ln=True)
+                pdf.cell(0, 10, txt=f"Date of Service: {row['date_of_service']}", ln=True)
+                pdf.cell(0, 10, txt=f"Service Description: {row['service_description']}", ln=True)
+                pdf.cell(0, 10, txt=f"Service Status: {row['service_status']}", ln=True)
+                pdf.cell(0, 10, txt=f"Rating: {row['rating']}", ln=True)
+                pdf.cell(0, 10, txt=f"Review: {row['review']}", ln=True)
+                pdf.cell(0, 10, txt=f"Service Name: {row['service_name']}", ln=True)
+                pdf.cell(0, 10, txt="", ln=True) 
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                pdf.output(temp_file.name)  
+                temp_file.seek(0)  
+
+            with open(temp_file.name, 'rb') as pdf_file:
+                response = requests.post(
+                    MAILGUN_API_URL,
+                    auth=("api", MAILGUN_API_KEY),
+                    data={
+                        "from": MAILGUN_FROM_EMAIL,
+                        "to": user['email'],
+                        "subject": "Cocoon Monthly Report - Celery",
+                        "text": email_content
+                    },
+                    files={
+                        "attachment": (temp_file.name, pdf_file, "application/pdf")
+                    }
+                )
+
+                if response.status_code == 200:
+                    return {'success': True, 'message': 'Email sent successfully'}
+                else:
+                    return {'success': False, 'error': response.json()}
+
+    except sqlite3.Error as e:
+        return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
+
+    finally:
+        conn.close()
+
+@celery.on_after_configure.connect
+def setup_periodic_tasks(sender, **kwargs):
+    sender.add_periodic_task(crontab(hour = "1", minute="30"), send_celery_email.s())
+    sender.add_periodic_task(crontab(day_of_month= "1", hour = "6", minute="40"), generate_professional_monthly_report.s())
+
+setup_periodic_tasks(celery)
+
 def send_email(to_email, subject, text):
-    # Load Mailgun parameters from environment variables
     api_url = MAILGUN_API_URL
     api_key = MAILGUN_API_KEY
     from_email = MAILGUN_FROM_EMAIL
 
-    # Send the email via Mailgun
     response = requests.post(
         api_url,
         auth=("api", api_key),
@@ -47,7 +214,6 @@ def send_email(to_email, subject, text):
         }
     )
 
-    # Handle response
     if response.status_code == 200:
         return {'success': True, 'message': 'Email sent successfully'}
     else:
@@ -674,7 +840,8 @@ def get_service_requests(status):
                 p.full_name AS professional_name,
                 c.full_name AS customer_name,
                 c.address,
-                p.pincode,
+                c.pincode as customer_pincode,
+                p.pincode as professional_pincode,
                 sr.price,
                 sr.date_of_service,
                 sr.service_description,
@@ -832,6 +999,99 @@ def generate_customer_report():
 
         return send_file(temp_file.name, as_attachment=True, download_name='customer_report.pdf', mimetype='application/pdf')
 
+@app.route('/generate-report/admin/', methods=['GET'])
+def generate_admin_report():
+    user_type = session.get('user_type')
+    if user_type != 'admin':
+        return jsonify({"success": False, "error": "Unauthorized", "message": "Login to generate report", "code": 403}), 403
+    query = """
+        SELECT 
+            sr.id AS request_id,
+            sr.date_of_request,
+            sr.date_of_service,
+            sr.service_description,
+            sr.price,
+            sr.service_status,
+            sr.rating,
+            sr.review,
+            cn.customer_id,
+            cn.full_name AS customer_name,
+            cn.customer_username,
+            cn.address AS customer_address,
+            cn.pincode AS customer_pincode,
+            cn.phone AS customer_phone,
+            cn.customer_mail,
+            pn.professional_id,
+            pn.full_name AS professional_name,
+            pn.service_provided AS professional_service,
+            pn.pincode AS professional_pincode,
+            pn.experience AS professional_experience,
+            pn.phone AS professional_phone,
+            pn.professional_mail,
+            pn.professional_username
+        FROM 
+            service_requests sr
+        JOIN 
+            (SELECT 
+                cr.id AS customer_id, 
+                cr.email as customer_mail,
+                cr.username as customer_username,
+                c.full_name, 
+                c.address, 
+                c.pincode, 
+                c.phone 
+            FROM 
+                customers c 
+            JOIN 
+                credentials cr ON c.credential_id = cr.id) AS cn
+        ON 
+            sr.customer_id = cn.customer_id
+        LEFT JOIN 
+            (SELECT 
+                cr.id AS professional_id, 
+                cr.email as professional_mail,
+                cr.username as professional_username,
+                p.full_name, 
+                p.service_provided, 
+                p.pincode, 
+                p.experience, 
+                p.phone 
+            FROM 
+                professionals p 
+            JOIN 
+                credentials cr ON p.credential_id = cr.id) AS pn
+        ON 
+            sr.professional_id = pn.professional_id
+    """
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        if not rows:
+            raise Exception("No service requests found for the specified customer.")
+
+        df = pd.read_sql_query(query, conn)
+
+        output = io.BytesIO()
+        df.to_csv(output, index=False)
+        output.seek(0)
+
+        return Response(
+            output,
+            mimetype='text/csv',
+            headers={"Content-Disposition": "attachment;filename=service_requests.csv"}
+        )
+
+    except sqlite3.Error as e:
+        raise Exception("Database query error: " + str(e))
+    except Exception as e:
+        raise Exception("Error fetching data: " + str(e))
+    finally:
+        conn.close()
+
 @app.route('/delete-service-request/<int:request_id>', methods=['DELETE'])
 def delete_service_request(request_id):
     user_id, user_type = session.get('user_id'), session.get('user_type')
@@ -916,13 +1176,12 @@ def close_service_request(request_id):
 
         cursor.execute("UPDATE service_requests SET service_status = 'closed', rating = ?, review = ? WHERE id = ?", (rating, review, request_id))
         conn.commit()
-        print("je")
         return jsonify({"success": True, "message": "Request accepted successfully", "code": 200}), 200
     
     except sqlite3.Error as e:
         return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
     except Exception as e:
-        print(e)
+        return jsonify({"success": False, "error": "Database error", "message": str(e), "code": 500}), 500
     finally:
         conn.close()
 
@@ -1366,3 +1625,4 @@ def create_service():
 
 if __name__ == "__main__":
     app.run(debug=True)
+    celery.start()

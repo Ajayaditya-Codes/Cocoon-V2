@@ -28,3 +28,8 @@ coverage
 *.sw?
 
 *.tsbuildinfo
+
+*.db
+*.rdb
+celerybeat-schedule
+flask-session/*

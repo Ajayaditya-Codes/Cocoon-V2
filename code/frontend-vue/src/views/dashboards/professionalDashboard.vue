@@ -47,7 +47,7 @@
           <tr v-for="service in assignedServices" :key="service.id">
             <td>{{ service.customer_name }}</td>
             <td>{{ service.address }}</td>
-            <td>{{ service.pincode }}</td>
+            <td>{{ service.customer_pincode }}</td>
             <td>{{ service.price }}</td>
             <td>{{ service.date_of_service }}</td>
             <td>{{ service.service_description }}</td>
@@ -76,7 +76,7 @@
           <tr v-for="service in requestedServices" :key="service.id">
             <td>{{ service.customer_name }}</td>
             <td>{{ service.address }}</td>
-            <td>{{ service.pincode }}</td>
+            <td>{{ service.customer_pincode }}</td>
             <td>
               <input type="number" v-model.number="service.price" required />
             </td>

@@ -10,10 +10,11 @@ billiard==4.2.1
 blinker==1.4
 Brlapi==0.8.3
 Brotli==1.0.9
-cachelib==0.13.0
+cachelib==0.9.0
 catkin-pkg-modules==1.0.0
 celery==5.4.0
 certifi==2020.6.20
+cffi==1.17.1
 chardet==4.0.0
 chrome-gnome-shell==0.0.0
 click==8.1.7
@@ -35,6 +36,7 @@ docutils==0.17.1
 empy==3.3.4
 flake8==4.0.1
 Flask==2.2.3
+Flask-Caching==2.3.0
 Flask-Cors==3.0.10
 Flask-Mail==0.10.0
 Flask-Session==0.4.0
@@ -70,10 +72,11 @@ more-itertools==8.10.0
 mpi4py==3.1.3
 mpmath==0.0.0
 netifaces==0.11.0
-numpy==1.21.5
+numpy==2.1.2
 oauthlib==3.2.0
 olefile==0.46
 packaging==21.3
+pandas==2.2.3
 pexpect==4.8.0
 Pillow==9.0.1
 pluggy==0.13.0
@@ -85,6 +88,7 @@ ptyprocess==0.7.0
 py==1.10.0
 pycairo==1.20.1
 pycodestyle==2.8.0
+pycparser==2.22
 pycups==2.0.1
 pydocstyle==6.1.1
 pydot==1.4.2

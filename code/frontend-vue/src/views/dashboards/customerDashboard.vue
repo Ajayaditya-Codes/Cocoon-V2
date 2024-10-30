@@ -55,7 +55,7 @@
           <tr v-for="service in requestedServices" :key="service.request_id">
             <td>{{ service.professional_name }} ({{ service.p_phone }})</td>
             <td>{{ service.service_name }}</td>
-            <td>{{ service.pincode }}</td>
+            <td>{{ service.professional_pincode }}</td>
             <td>{{ service.price }}</td>
 
             <td>
@@ -118,7 +118,7 @@
           <tr v-for="service in quotedServices" :key="service.request_id">
             <td>{{ service.professional_name }}({{ service.p_phone }})</td>
             <td>{{ service.service_name }}</td>
-            <td>{{ service.pincode }}</td>
+            <td>{{ service.professional_pincode }}</td>
             <td>{{ service.price }}</td>
             <td>{{ service.date_of_service }}</td>
             <td>{{ service.service_description }}</td>
@@ -168,7 +168,7 @@
           <tr v-for="service in assignedServices" :key="service.id">
             <td>{{ service.professional_name }} ({{ service.p_phone }})</td>
             <td>{{ service.service_name }}</td>
-            <td>{{ service.pincode }}</td>
+            <td>{{ service.professional_pincode }}</td>
             <td>{{ service.price }}</td>
             <td>{{ service.date_of_service }}</td>
             <td>{{ service.service_description }}</td>
@@ -249,7 +249,7 @@
                   : ''
               }}
             </td>
-            <td>{{ service.pincode }}</td>
+            <td>{{ service.professional_pincode }}</td>
             <td>{{ service.price }}</td>
             <td>
               <input type="date" v-model="service.date" :min="minDate" />
@@ -469,7 +469,9 @@ export default {
         services.value = serviceList
         filteredServices.value = response.data
         uniquePincodes.value = [
-          ...new Set(response.data.map(service => service.pincode)),
+          ...new Set(
+            response.data.map(service => service.professional_pincode),
+          ),
         ]
       } catch (error) {
         console.error('Failed to fetch services:', error)
@@ -702,7 +704,7 @@ export default {
             .toLowerCase()
             .includes(searchQuery.value.toLowerCase())
         const matchesPincode = selectedPincode.value
-          ? service.pincode === selectedPincode.value
+          ? service.professional_pincode === selectedPincode.value
           : true
         return matchesSearch && matchesPincode
       })
