@@ -34,17 +34,18 @@
 
 <script>
 import { ref, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
-import Cookies from 'js-cookie'
+import axios from 'axios'
 
 export default {
   setup() {
     const userType = ref(null)
     const dashboardLink = ref('')
 
-    onMounted(() => {
-      userType.value = Cookies.get('user_type')
-
+    onMounted(async () => {
+      const response = await axios.get('http://localhost:5000/session-status', {
+        withCredentials: true,
+      })
+      userType.value = response.data.user_type
       if (userType.value) {
         switch (userType.value) {
           case 'admin':

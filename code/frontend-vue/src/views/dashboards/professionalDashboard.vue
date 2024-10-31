@@ -300,6 +300,10 @@ export default {
           alert('Phone number must be exactly 10 digits long.')
           return
         }
+        if (userInfo.value.experience < 0) {
+          alert('Experience cannot be negative')
+          return
+        }
         const response = await axios.put(
           'http://localhost:5000/professional/profile',
           userInfo.value,
@@ -507,20 +511,8 @@ export default {
       }
     }
 
-    const checkUser = async () => {
-      fetchUserData()
-      if (
-        userInfo.username === null ||
-        userInfo.username === undefined ||
-        userInfo.username === '' ||
-        userInfo.blocked === 1
-      ) {
-        router.push('/signin')
-      }
-    }
-
     onMounted(() => {
-      fetchUserData(), fetchServices(), servicesSetup(), checkUser()
+      fetchUserData(), fetchServices(), servicesSetup()
     })
 
     return {

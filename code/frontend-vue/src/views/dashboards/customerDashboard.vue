@@ -249,7 +249,7 @@
                   : ''
               }}
             </td>
-            <td>{{ service.professional_pincode }}</td>
+            <td>{{ service.pincode }}</td>
             <td>{{ service.price }}</td>
             <td>
               <input type="date" v-model="service.date" :min="minDate" />
@@ -354,6 +354,7 @@ export default {
     })
 
     const services = ref([])
+    const baseServices = ref([])
     const filteredServices = ref([])
 
     const searchQuery = ref('')
@@ -467,11 +468,10 @@ export default {
           service.description = ''
         }
         services.value = serviceList
+        baseServices.value = serviceList
         filteredServices.value = response.data
         uniquePincodes.value = [
-          ...new Set(
-            response.data.map(service => service.professional_pincode),
-          ),
+          ...new Set(response.data.map(service => service.pincode)),
         ]
       } catch (error) {
         console.error('Failed to fetch services:', error)
@@ -695,7 +695,7 @@ export default {
     }
 
     const filterServices = () => {
-      filteredServices.value = services.value.filter(service => {
+      filteredServices.value = baseServices.value.filter(service => {
         const matchesSearch =
           service.professionalName
             .toLowerCase()
@@ -704,28 +704,14 @@ export default {
             .toLowerCase()
             .includes(searchQuery.value.toLowerCase())
         const matchesPincode = selectedPincode.value
-          ? service.professional_pincode === selectedPincode.value
+          ? service.pincode === selectedPincode.value
           : true
         return matchesSearch && matchesPincode
       })
     }
-
-    const checkUser = async () => {
-      fetchUserData()
-      if (
-        userInfo.username === null ||
-        userInfo.username === undefined ||
-        userInfo.username === '' ||
-        userInfo.blocked === 1
-      ) {
-        router.push('/signin')
-      }
-    }
-
     onMounted(() => {
       fetchUserData()
       servicesSetup()
-      checkUser()
     })
 
     return {

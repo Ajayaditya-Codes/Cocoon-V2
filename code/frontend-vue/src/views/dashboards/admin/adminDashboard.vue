@@ -41,6 +41,14 @@
     </div>
 
     <div v-if="activeTab === 'services'" class="dashboard-tab">
+      <form @submit.prevent="filterServices" class="service-filter-form">
+        <input
+          v-model="searchServiceQuery"
+          class="form-control"
+          placeholder="Search services or description..."
+        />
+        <button type="submit" class="btn btn-filter">Filter</button>
+      </form>
       <table class="service-table">
         <thead>
           <tr>
@@ -124,6 +132,24 @@
     </div>
 
     <div v-if="activeTab === 'professionals'" class="dashboard-tab">
+      <form @submit.prevent="filterProfessionals" class="service-filter-form">
+        <input
+          v-model="searchProfessionalQuery"
+          class="form-control"
+          placeholder="Search services or professionals..."
+        />
+        <select v-model="selectedProfessionalPincode" class="form-control">
+          <option value="">Select Pincode</option>
+          <option
+            v-for="pincode in uniqueProfessionalPincodes"
+            :key="pincode"
+            :value="pincode"
+          >
+            {{ pincode }}
+          </option>
+        </select>
+        <button type="submit" class="btn btn-filter">Filter</button>
+      </form>
       <table class="service-table">
         <thead>
           <tr>
@@ -165,6 +191,24 @@
       </table>
     </div>
     <div v-if="activeTab === 'customers'" class="dashboard-tab">
+      <form @submit.prevent="filterCustomers" class="service-filter-form">
+        <input
+          v-model="searchCustomerQuery"
+          class="form-control"
+          placeholder="Search services or professionals..."
+        />
+        <select v-model="selectedCustomerPincode" class="form-control">
+          <option value="">Select Pincode</option>
+          <option
+            v-for="pincode in uniqueCustomerPincodes"
+            :key="pincode"
+            :value="pincode"
+          >
+            {{ pincode }}
+          </option>
+        </select>
+        <button type="submit" class="btn btn-filter">Filter</button>
+      </form>
       <table class="service-table">
         <thead>
           <tr>
@@ -209,11 +253,24 @@ import { useRouter } from 'vue-router'
 
 export default {
   setup() {
+    const newServiceName = ref('')
+    const newServicePrice = ref(0)
+    const newServiceDescription = ref('')
     const activeTab = ref('services')
     const router = useRouter()
+    const searchCustomerQuery = ref('')
     const professionals = ref([])
+    const uniqueCustomerPincodes = ref([])
+    const selectedCustomerPincode = ref('')
+    const uniqueProfessionalPincodes = ref([])
+    const selectedProfessionalPincode = ref('')
     const customers = ref([])
     const services = ref([])
+    const baseProfessionals = ref([])
+    const baseCustomers = ref([])
+    const baseServices = ref([])
+    const searchServiceQuery = ref('')
+    const searchProfessionalQuery = ref('')
 
     const switchTab = tab => {
       activeTab.value = tab
@@ -240,6 +297,10 @@ export default {
           },
         )
         professionals.value = response.data
+        baseProfessionals.value = response.data
+        uniqueProfessionalPincodes.value = [
+          ...new Set(response.data.map(professional => professional.pincode)),
+        ]
       } catch (error) {
         console.error('Failed to fetch professionals:', error)
         alert('Failed to fetch professionals. Please try again')
@@ -263,6 +324,10 @@ export default {
           },
         )
         customers.value = response.data
+        baseCustomers.value = response.data
+        uniqueCustomerPincodes.value = [
+          ...new Set(response.data.map(customer => customer.pincode)),
+        ]
       } catch (error) {
         console.error('Failed to fetch customers:', error)
         alert('Failed to fetch customers. Please try again')
@@ -275,6 +340,7 @@ export default {
           withCredentials: true,
         })
         services.value = response.data
+        baseServices.value = response.data
       } catch (error) {
         console.error('Failed to fetch services:', error)
 
@@ -299,7 +365,7 @@ export default {
       }
       try {
         const response = await axios.put(
-          `http://localhost:5000/admin/update-service-price/${serviceId}`,
+          `http://localhost:5000/admin/update-service/${serviceId}`,
           { new_price: newPrice, new_description: newDescription },
           {
             withCredentials: true,
@@ -331,12 +397,12 @@ export default {
     }
 
     const createService = async (serviceName, servicePrice, description) => {
+      console.log(serviceName, servicePrice, description)
       if (
-        !servicePrice ||
-        !description ||
-        servicePrice <= 0 ||
+        serviceName === '' ||
         isNaN(servicePrice) ||
-        serviceName
+        description === '' ||
+        servicePrice < 0
       ) {
         alert('Please enter a valid input.')
         return
@@ -406,6 +472,62 @@ export default {
       }
     }
 
+    const filterServices = () => {
+      services.value = baseServices.value.filter(service => {
+        const matchesSearch =
+          service.description
+            .toLowerCase()
+            .includes(searchServiceQuery.value.toLowerCase()) ||
+          service.name
+            .toLowerCase()
+            .includes(searchServiceQuery.value.toLowerCase())
+        return matchesSearch
+      })
+    }
+    const filterProfessionals = () => {
+      professionals.value = baseProfessionals.value.filter(professional => {
+        const matchesSearch =
+          professional.full_name
+            .toLowerCase()
+            .includes(searchProfessionalQuery.value.toLowerCase()) ||
+          professional.email
+            .toLowerCase()
+            .includes(searchProfessionalQuery.value.toLowerCase()) ||
+          professional.username
+            .toLowerCase()
+            .includes(searchProfessionalQuery.value.toLowerCase()) ||
+          professional.service_provided
+            .toLowerCase()
+            .includes(searchProfessionalQuery.value.toLowerCase())
+        const matchesPincode = selectedProfessionalPincode.value
+          ? professional.pincode === selectedProfessionalPincode.value
+          : true
+        return matchesSearch && matchesPincode
+      })
+    }
+
+    const filterCustomers = () => {
+      customers.value = baseCustomers.value.filter(customer => {
+        const matchesSearch =
+          customer.full_name
+            .toLowerCase()
+            .includes(searchCustomerQuery.value.toLowerCase()) ||
+          customer.email
+            .toLowerCase()
+            .includes(searchCustomerQuery.value.toLowerCase()) ||
+          customer.username
+            .toLowerCase()
+            .includes(searchCustomerQuery.value.toLowerCase()) ||
+          customer.address
+            .toLowerCase()
+            .includes(searchCustomerQuery.value.toLowerCase())
+        const matchesPincode = selectedCustomerPincode.value
+          ? customer.pincode === selectedCustomerPincode.value
+          : true
+        return matchesSearch && matchesPincode
+      })
+    }
+
     onMounted(() => {
       fetchProfessionals()
       fetchCustomers()
@@ -414,9 +536,15 @@ export default {
 
     return {
       activeTab,
+      uniqueCustomerPincodes,
+      selectedCustomerPincode,
+      uniqueProfessionalPincodes,
+      selectedProfessionalPincode,
+      filterCustomers,
       goToProfessional,
       goToCustomer,
       logout,
+      filterServices,
       switchTab,
       professionals,
       customers,
@@ -424,6 +552,13 @@ export default {
       updateService,
       createService,
       generateReport,
+      newServiceDescription,
+      newServiceName,
+      newServicePrice,
+      searchServiceQuery,
+      searchCustomerQuery,
+      searchProfessionalQuery,
+      filterProfessionals,
     }
   },
 }

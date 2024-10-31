@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from fpdf import FPDF
 import pandas as pd
 import io
+from flask_caching import Cache
 
 load_dotenv()
 app = Flask(__name__)
@@ -24,7 +25,7 @@ CORS(app, supports_credentials=True)
 app.config['SESSION_TYPE'] = 'filesystem' 
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True  
-app.config['SECRET_KEY'] = 'aefnjnsdfjnqoiwj18921@q83&e239asd' 
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY')
 
 Session(app)
 
@@ -35,6 +36,12 @@ MAILGUN_FROM_EMAIL = os.getenv('MAILGUN_FROM_EMAIL')
 app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
 celery = Celery(__name__, broker=app.config['CELERY_BROKER_URL'])
 
+app.config['CACHE_TYPE'] = 'RedisCache'
+app.config['CACHE_REDIS_URL'] = 'redis://localhost:6379/0'  
+app.config['CACHE_DEFAULT_TIMEOUT'] = 300  
+
+cache = Cache(app)
+
 @celery.task
 def send_celery_email():
     try:
@@ -43,6 +50,7 @@ def send_celery_email():
         users = cursor.execute("SELECT email, username, id FROM credentials WHERE userType = 'professional'").fetchall()
 
         user_list = [dict(user) for user in users]
+        date = datetime.now().date().strftime('%Y-%m-%d')
 
         for user in user_list:
             cursor.execute("""
@@ -52,20 +60,18 @@ def send_celery_email():
                     c.address,
                     c.pincode,
                     sr.price,
-                    sr.date_of_service,
                     sr.service_description,
                     c.phone,
                     sr.service_status
                 FROM service_requests sr
                 JOIN customers c ON sr.customer_id = c.credential_id
-                WHERE sr.professional_id = ? AND (sr.service_status = 'requested' OR sr.service_status = 'assigned')
-            """, (user["id"],))
+                WHERE sr.professional_id = ? AND (sr.service_status = 'requested' OR sr.service_status = 'assigned') AND sr.date_of_service = ?
+            """, (user["id"],date))
             services = cursor.fetchall()
 
             services = [dict(service) for service in services]
 
             email_content = f"Hello,\n\nHere are your pending service requests:\n\n"
-
             for service in services:
                 email_content += (
                     f"Request ID: {service['request_id']}\n" 
@@ -194,7 +200,7 @@ def generate_professional_monthly_report():
 @celery.on_after_configure.connect
 def setup_periodic_tasks(sender, **kwargs):
     sender.add_periodic_task(crontab(hour = "1", minute="30"), send_celery_email.s())
-    sender.add_periodic_task(crontab(day_of_month= "1", hour = "6", minute="40"), generate_professional_monthly_report.s())
+    sender.add_periodic_task(crontab(day_of_month= "1", hour = "1", minute="30"), generate_professional_monthly_report.s())
 
 setup_periodic_tasks(celery)
 
@@ -295,45 +301,6 @@ def logout():
     session.clear()  
     return jsonify({"message": "Logged out successfully"}), 200    
 
-#remove the route later --- only for debugging
-@app.route("/users")
-def users():
-    try:
-        conn = get_db_connection()
-        users = conn.execute("""
-            SELECT c.id, c.username, c.email, c.userType,
-                   CASE 
-                       WHEN c.userType = 'customer' THEN cu.full_name 
-                       WHEN c.userType = 'professional' THEN p.full_name 
-                   END AS full_name,
-                   CASE 
-                       WHEN c.userType = 'customer' THEN cu.address 
-                       WHEN c.userType = 'professional' THEN p.service_provided 
-                   END AS additional_info,
-                   CASE 
-                       WHEN c.userType = 'customer' THEN cu.pincode 
-                       WHEN c.userType = 'professional' THEN p.pincode 
-                   END AS pincode
-            FROM credentials c
-            LEFT JOIN customers cu ON c.id = cu.credential_id
-            LEFT JOIN professionals p ON c.id = p.credential_id
-        """).fetchall()
-
-        if not users:
-            return jsonify({"message": "No users found"}), 404
-
-        users_list = [dict(user) for user in users]
-        return jsonify(users_list), 200
-
-    except sqlite3.Error as e:
-        return jsonify({"message": f"Database error: {str(e)}"}), 500
-
-    except Exception as e:
-        return jsonify({"message": f"An unexpected error occurred: {str(e)}"}), 500
-
-    finally:
-        conn.close()
-
 @app.route("/signup-customer", methods=["POST"])
 def signup_customer():
     data = request.get_json()
@@ -390,6 +357,7 @@ def signup_customer():
         )
 
         conn.commit()
+        cache.delete("admin_customers")
         return jsonify({"success": True, "message": "Customer registered successfully."}), 201
 
     except sqlite3.IntegrityError:
@@ -457,6 +425,8 @@ def signup_professional():
         )
 
         conn.commit()
+        cache.delete("get_services")
+        cache.delete("admin_professionals")
         return jsonify({"success": True, "message": "Professional registered successfully"}), 201
 
     except sqlite3.Error as e:
@@ -471,6 +441,7 @@ def signup_professional():
         conn.close()
 
 @app.route("/services", methods=["GET"])
+@cache.cached(timeout=300, key_prefix='services')  
 def services():
     try:
         conn = get_db_connection()
@@ -488,6 +459,7 @@ def services():
         conn.close()
 
 @app.route('/customer/profile', methods=['GET'])
+@cache.cached(timeout=300, key_prefix='customer_profile')  
 def get_customer_profile():
     try:
         user_id = session.get('user_id')
@@ -564,6 +536,7 @@ def update_customer_profile():
                 )
 
             conn.commit()
+            cache.delete("customer_profile")
             return jsonify({"success": True, "message": "Profile updated successfully."}), 200
 
         except sqlite3.Error as e:
@@ -577,6 +550,7 @@ def update_customer_profile():
         return jsonify({"success": False, "error": "Database error", "message": str(e)}), 500
 
 @app.route('/professional/profile', methods=['GET'])
+@cache.cached(timeout=300, key_prefix='professional_profile')  
 def get_professional_profile():
     try:
         user_id = session.get('user_id')
@@ -700,6 +674,7 @@ def update_professional_profile():
                     )
 
                 conn.commit()
+                cache.delete("professional_profile")
                 return jsonify({
                     "success": True,
                     "message": "Profile updated successfully."
@@ -726,6 +701,7 @@ def update_professional_profile():
         }), 500
 
 @app.route('/get_services', methods=['GET'])
+@cache.cached(timeout=300, key_prefix='get_services')  
 def get_services():
     try:
         conn = get_db_connection()
@@ -1243,8 +1219,10 @@ def update_service_request(request_id):
         conn.close()
 
 @app.route('/admin/professionals', methods=['GET'])
+@cache.cached(timeout=300, key_prefix='admin_professionals')  
 def admin_get_professionals():
     user_id, user_type = session.get('user_id'), session.get('user_type')
+    print('user_type')
 
     if user_type != 'admin':
         return jsonify({"success": False, "error": "Unauthorized", "message": "Admin access required", "code": 403}), 403
@@ -1279,6 +1257,7 @@ def admin_get_professionals():
         conn.close()
 
 @app.route('/admin/customers', methods=['GET'])
+@cache.cached(timeout=300, key_prefix='admin_customers')  
 def admin_get_customers():
     user_id, user_type = session.get('user_id'), session.get('user_type')
 
@@ -1313,6 +1292,7 @@ def admin_get_customers():
         conn.close()
 
 @app.route('/admin/professional/<int:professional_id>', methods=['GET'])
+@cache.cached(timeout=120, key_prefix='admin_professional')  
 def admin_get_professional(professional_id):
     user_id, user_type = session.get('user_id'), session.get('user_type')
 
@@ -1366,6 +1346,7 @@ def admin_get_professional(professional_id):
         conn.close()
 
 @app.route('/admin/customer/<int:customer_id>', methods=['GET'])
+@cache.cached(timeout=120, key_prefix='admin_customer')  
 def admin_get_customer(customer_id):
     user_id, user_type = session.get('user_id'), session.get('user_type')
 
@@ -1469,6 +1450,8 @@ def admin_block_user(user_id):
             text='Your account has been blocked by an admin. If you believe this is an error, please contact support.'
         )
 
+        cache.delete("admin_professional")
+        cache.delete("admin_customer")  
         return jsonify({"success": True, "message": "User blocked successfully", "email_status": email_result}), 200
 
     except sqlite3.Error as e:
@@ -1507,6 +1490,8 @@ def admin_unblock_user(user_id):
             text='Your account has been unblocked. You can now log in.'
         )
 
+        cache.delete("admin_professional")
+        cache.delete("admin_customer")
         return jsonify({"success": True, "message": "User unblocked successfully", "email_status": email_result}), 200
 
     except sqlite3.Error as e:
@@ -1546,6 +1531,7 @@ def verify_professional(professional_id):
             text='Congratulations! Your professional profile has been successfully verified.'
         )
 
+        cache.delete("admin_professional")
         return jsonify({"success": True, "message": "Professional verified successfully", "email_status": email_result}), 200
 
     except sqlite3.Error as e:
@@ -1554,8 +1540,8 @@ def verify_professional(professional_id):
     finally:
         conn.close()
 
-@app.route('/admin/update-service-price/<int:service_id>', methods=['PUT'])
-def update_service_price(service_id):
+@app.route('/admin/update-service/<int:service_id>', methods=['PUT'])
+def update_service(service_id):
     user_id, user_type = session.get('user_id'), session.get('user_type')
 
     if user_type != 'admin':
@@ -1580,6 +1566,7 @@ def update_service_price(service_id):
 
         cursor.execute("UPDATE services SET price = ?, description = ? WHERE id = ?", (new_price, new_description, service_id))
         conn.commit()
+        cache.delete("services")
         return jsonify({"success": True, "message": "Service price updated successfully", "code": 200}), 200
 
     except sqlite3.Error as e:
@@ -1615,6 +1602,7 @@ def create_service():
 
         cursor.execute("INSERT INTO services (name, price, description) VALUES (?, ?, ?)", (service_name, service_price, description))
         conn.commit()
+        cache.delete("services")
         return jsonify({"success": True, "message": "Service created successfully", "code": 201}), 201
 
     except sqlite3.Error as e:
