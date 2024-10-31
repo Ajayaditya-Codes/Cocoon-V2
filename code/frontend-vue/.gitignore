@@ -29,7 +29,8 @@ coverage
 
 *.tsbuildinfo
 
-*.db
-*.rdb
+.db
+.rdb
 celerybeat-schedule
 flask-session/*
+.env
